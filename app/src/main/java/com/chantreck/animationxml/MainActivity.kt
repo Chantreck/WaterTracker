@@ -4,49 +4,26 @@ import android.animation.ValueAnimator
 import android.graphics.Color
 import androidx.appcompat.app.AppCompatActivity
 import android.os.Bundle
+import android.widget.TextView
 import com.chantreck.animationxml.databinding.ActivityMainBinding
-import com.google.android.gms.tasks.Task
 import com.google.android.gms.wearable.*
 
 class MainActivity : AppCompatActivity(R.layout.activity_main), DataClient.OnDataChangedListener {
     private val binding by lazy { ActivityMainBinding.inflate(layoutInflater) }
     private val dataClient by lazy { Wearable.getDataClient(this) }
-    private val putDataMapRequest by lazy { PutDataMapRequest.create("/state") }
-
+    private val putDataMapRequest by lazy { PutDataMapRequest.create(MESSAGE_PATH) }
     private var state = State()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(binding.root)
 
-        binding.button.setOnClickListener {
-            updateState(state)
-        }
-    }
-
-    private fun redraw(oldState: State, newState: State) {
-        ValueAnimator.ofFloat(oldState.percentage, newState.percentage).apply {
-            duration = 1000
-            addUpdateListener {
-                val percent = it.animatedValue as Float
-                val remainPercent = 1 - percent
-
-                binding.water.alpha = percent
-                binding.waterLevel.setGuidelinePercent(remainPercent)
-
-                if (remainPercent < DRUNK_THRESHOLD) {
-                    binding.drunkLabel.setTextColor(Color.WHITE)
-                }
-
-                if (remainPercent < REMAIN_THRESHOLD) {
-                    binding.remainLabel.setTextColor(Color.WHITE)
-                }
+        binding.button.apply {
+            text = "+$STEP мл"
+            setOnClickListener {
+                updateState(state)
             }
-            start()
         }
-
-        binding.drunkLabel.text = "Выпито:\n ${newState.drunk} мл"
-        binding.remainLabel.text = "Осталось:\n ${newState.remain} мл"
     }
 
     private fun updateState(state: State) {
@@ -59,9 +36,9 @@ class MainActivity : AppCompatActivity(R.layout.activity_main), DataClient.OnDat
     private fun sendStateToWear(state: State) {
         val request = putDataMapRequest.run {
             dataMap.apply {
-                putInt("DRUNK", state.drunk)
-                putInt("REMAIN", state.remain)
-                putFloat("PERCENTAGE", state.percentage)
+                putInt(KEY_DRUNK, state.drunk)
+                putInt(KEY_REMAIN, state.remain)
+                putFloat(KEY_PERCENTAGE, state.percentage)
             }
             setUrgent()
             asPutDataRequest()
@@ -69,48 +46,93 @@ class MainActivity : AppCompatActivity(R.layout.activity_main), DataClient.OnDat
         dataClient.putDataItem(request)
     }
 
-    data class State(
-        var drunk: Int = 0,
-        var remain: Int = MAX_AMOUNT,
-        var percentage: Float = 0f,
-    )
+    private fun DataEventBuffer.getStateFromWear() = forEach { event ->
+        if (event.type == DataEvent.TYPE_CHANGED) {
+            val item = event.dataItem
+            val path = item.uri.path ?: return@forEach
 
-    private companion object {
-        const val MAX_AMOUNT = 2500
-        const val STEP = 250
-
-        const val REMAIN_THRESHOLD = 0.2f
-        const val DRUNK_THRESHOLD = 0.4f
-    }
-
-    override fun onResume() {
-        super.onResume()
-        Wearable.getDataClient(this).addListener(this)
-    }
-
-    override fun onPause() {
-        super.onPause()
-        Wearable.getDataClient(this).removeListener(this)
-    }
-
-    override fun onDataChanged(dataEvents: DataEventBuffer) {
-        dataEvents.forEach { event ->
-            if (event.type == DataEvent.TYPE_CHANGED) {
-                event.dataItem.also { item ->
-                    if (item.uri.path?.compareTo("/state") == 0) {
-                        DataMapItem.fromDataItem(item).dataMap.extractState()
-                    }
-                }
+            if (path == MESSAGE_PATH) {
+                val newState = DataMapItem.fromDataItem(item).dataMap.extractState()
+                redraw(newState)
+                state = newState
             }
         }
     }
 
-    private fun DataMap.extractState() {
-        val drunk = getInt("DRUNK")
-        val remain = getInt("REMAIN")
-        val percentage = getFloat("PERCENTAGE")
-        val newState = State(drunk, remain, percentage)
-        redraw(oldState = state, newState = newState)
-        state = newState
+    private fun DataMap.extractState(): State = State(
+        drunk = getInt(KEY_DRUNK),
+        remain = getInt(KEY_REMAIN),
+        percentage = getFloat(KEY_PERCENTAGE)
+    )
+
+    private fun redraw(newState: State) {
+        binding.drunkLabel.text = "Выпито:\n ${newState.drunk} мл"
+        binding.remainLabel.text = "Осталось:\n ${newState.remain} мл"
+
+        animateWaterLevelRising(oldLevel = state.percentage, newLevel = newState.percentage)
+
+        if (newState.percentage == DRUNK_THRESHOLD) {
+            changeTextColor(binding.drunkLabel)
+        }
+
+        if (newState.percentage == REMAIN_THRESHOLD) {
+            changeTextColor(binding.remainLabel)
+        }
+    }
+
+    private fun animateWaterLevelRising(oldLevel: Float, newLevel: Float) {
+        ValueAnimator.ofFloat(oldLevel, newLevel).apply {
+            duration = ANIMATION_DURATION
+            addUpdateListener {
+                val percent = it.animatedValue as Float
+                val remainPercent = 1 - percent
+
+                binding.water.alpha = percent
+                binding.waterLevel.setGuidelinePercent(remainPercent)
+            }
+            start()
+        }
+    }
+
+    private fun changeTextColor(textView: TextView, newColor: Int = Color.WHITE) {
+        val oldColor: Int = textView.currentTextColor
+        if (newColor == oldColor) return
+
+        ValueAnimator.ofArgb(oldColor, newColor).apply {
+            duration = ANIMATION_DURATION
+            addUpdateListener {
+                val value = it.animatedValue as Int
+                textView.setTextColor(value)
+            }
+            start()
+        }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        dataClient.addListener(this)
+    }
+
+    override fun onPause() {
+        super.onPause()
+        dataClient.removeListener(this)
+    }
+
+    override fun onDataChanged(dataEvents: DataEventBuffer) {
+        dataEvents.getStateFromWear()
+    }
+
+    companion object {
+        const val MAX_AMOUNT = 2500
+        private const val STEP = 250
+
+        private const val REMAIN_THRESHOLD = 0.8f
+        private const val DRUNK_THRESHOLD = 0.6f
+        private const val ANIMATION_DURATION: Long = 750
+
+        private const val MESSAGE_PATH = "/state"
+        private const val KEY_DRUNK = "DRUNK"
+        private const val KEY_REMAIN = "REMAIN"
+        private const val KEY_PERCENTAGE = "PERCENTAGE"
     }
 }
