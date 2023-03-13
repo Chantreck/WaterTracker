@@ -9,7 +9,7 @@ val Purple700 = Color(0xFF3700B3)
 val Teal200 = Color(0xFF03DAC5)
 val Red400 = Color(0xFFCF6679)
 
-val WaterColor = Color(0x4DC0FF)
+val WaterColor = Color(0xFF0277BD)
 
 internal val wearColorPalette: Colors = Colors(
     primary = Color(0xFF03A9F4),
